@@ -37,12 +37,23 @@ const addProduct = async (req, res) => {
 // GET /api/products?category=catId&sort=name&order=asc
 // GET /api/products?sort=price&order=desc
 // GET /api/products?sort=alphabetical&order=asc
+// 📦 Get Products (with category filter, sort, and search)
 const getProducts = async (req, res) => {
   try {
-    const { category, sort, order } = req.query;
+    const { category, sort, order, search } = req.query;
 
     const query = {};
-    if (category) query.category = category; // filter by category id
+
+    // ✅ Category filter
+    if (category) query.category = category;
+
+    // ✅ Search by name or category (partial match, case-insensitive)
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { description: { $regex: search, $options: "i" } },
+      ];
+    }
 
     let sortOption = {};
 
@@ -52,10 +63,10 @@ const getProducts = async (req, res) => {
     } else if (sort === "name" || sort === "alphabetical") {
       sortOption.name = order === "desc" ? -1 : 1; // A→Z or Z→A
     } else if (sort === "category") {
-      // Sort by category name (requires populate)
       sortOption["category.name"] = order === "desc" ? -1 : 1;
     }
 
+    // ✅ Fetch products
     const products = await Product.find(query)
       .populate("category", "name")
       .sort(sortOption);
@@ -65,6 +76,7 @@ const getProducts = async (req, res) => {
     res.status(500).json({ message: "Server error", error: err.message });
   }
 };
+
 
 
 // Get single product by ID

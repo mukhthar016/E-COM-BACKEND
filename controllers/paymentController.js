@@ -1,5 +1,6 @@
-// controllers/paymentController.js
+
 const Razorpay = require("razorpay");
+const crypto = require("crypto");
 require("dotenv").config();
 
 const razorpay = new Razorpay({
@@ -7,13 +8,16 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-// Create Razorpay test order
+
+
+//  Razorpay test order for fake payment 
 const createRazorpayOrder = async (req, res) => {
+  console.log("RAZORPAY_KEY_ID:", process.env.RAZORPAY_KEY_ID);
   try {
-    const { amount } = req.body; // amount in INR
+    const { amount } = req.body; 
 
     const options = {
-      amount: amount * 100, // Razorpay expects paise
+      amount: amount * 100, 
       currency: "INR",
       receipt: `receipt_${Date.now()}`
     };
@@ -30,7 +34,35 @@ const createRazorpayOrder = async (req, res) => {
   }
 };
 
-// You can still keep your old dummy UPI simulation if needed
+const verifyPayment = async (req, res) => {
+  try {
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(body.toString())
+      .digest("hex");
+
+    const isValid = expectedSignature === razorpay_signature;
+    console.log("Verification input:", req.body);
+console.log("Generated signature:", expectedSignature);
+console.log("Razorpay signature:", razorpay_signature);
+
+
+    if (isValid) {
+      return res.json({ success: true, message: "Payment verified successfully" });
+    } else {
+      return res.json({ success: false, message: "Invalid signature" });
+    }
+    
+  } catch (err) {
+    console.error("verifyPayment error:", err);
+    res.status(500).json({ success: false, message: "Server error during verification" });
+  }
+};
+
+// dummy upi for testing purpose ill remove it later
 const upiPayment = async (req, res) => {
   try {
     const { amount, upiId } = req.body;
@@ -47,4 +79,4 @@ const upiPayment = async (req, res) => {
   }
 };
 
-module.exports = { createRazorpayOrder, upiPayment };
+module.exports = { createRazorpayOrder, upiPayment,verifyPayment };

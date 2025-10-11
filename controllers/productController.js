@@ -1,3 +1,5 @@
+const mongoose = require('mongoose')
+
 const Product = require('../models/productModel');
 const Category = require('../models/categoryModel')
 
@@ -38,38 +40,56 @@ const addProduct = async (req, res) => {
 // GET /api/products?sort=price&order=desc
 // GET /api/products?sort=alphabetical&order=asc
 // 📦 Get Products (with category filter, sort, and search)
+// 📦 Get Products (supports category + search + sort)
 const getProducts = async (req, res) => {
   try {
     const { category, sort, order, search } = req.query;
 
-    const query = {};
+    // ✅ Define sorting logic
+    let sortOption = {};
+    if (sort === "price") sortOption.price = order === "desc" ? -1 : 1;
+    else if (sort === "name" || sort === "alphabetical")
+      sortOption.name = order === "desc" ? -1 : 1;
+    else if (sort === "category") sortOption["category.name"] = order === "desc" ? -1 : 1;
+
+    // ✅ Base pipeline
+    const pipeline = [
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "category",
+        },
+      },
+      { $unwind: { path: "$category", preserveNullAndEmptyArrays: true } },
+    ];
+
+    // ✅ Search logic
+    if (search) {
+      pipeline.push({
+        $match: {
+          $or: [
+            { name: { $regex: search, $options: "i" } },
+            { description: { $regex: search, $options: "i" } },
+            { "category.name": { $regex: search, $options: "i" } },
+          ],
+        },
+      });
+    }
 
     // ✅ Category filter
-    if (category) query.category = category;
-
-    // ✅ Search by name or category (partial match, case-insensitive)
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
-      ];
-    }
-
-    let sortOption = {};
-
+   if (category) {
+  pipeline.push({
+    $match: { "category._id": new mongoose.Types.ObjectId(category) },
+  });
+}
     // ✅ Sorting logic
-    if (sort === "price") {
-      sortOption.price = order === "desc" ? -1 : 1; // low→high or high→low
-    } else if (sort === "name" || sort === "alphabetical") {
-      sortOption.name = order === "desc" ? -1 : 1; // A→Z or Z→A
-    } else if (sort === "category") {
-      sortOption["category.name"] = order === "desc" ? -1 : 1;
+    if (Object.keys(sortOption).length > 0) {
+      pipeline.push({ $sort: sortOption });
     }
 
-    // ✅ Fetch products
-    const products = await Product.find(query)
-      .populate("category", "name")
-      .sort(sortOption);
+    const products = await Product.aggregate(pipeline);
 
     res.status(200).json(products);
   } catch (err) {

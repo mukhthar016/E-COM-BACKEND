@@ -12,18 +12,16 @@ const placeOrder = async (req, res) => {
   try {
     const { addressId, paymentMethod, paymentStatus, items, totalAmount } = req.body;
 
-    // try loading user cart
+    // Load cart
     let cart = await Cart.findOne({ user: req.user.id }).populate('items.product');
     let cartItems = [];
     let totalPrice = 0;
 
     if (cart && cart.items.length > 0) {
-      // ✅ normal flow (cart exists)
       cartItems = cart.items.map(i => ({
         product: i.product._id,
         quantity: i.quantity
       }));
-
       for (const item of cart.items) {
         const product = item.product;
         if (product.stock < item.quantity) {
@@ -32,7 +30,6 @@ const placeOrder = async (req, res) => {
         totalPrice += product.price * item.quantity;
       }
     } else if (items && items.length > 0) {
-      // ✅ fallback if cart is empty (UPI async flow)
       cartItems = items.map(i => ({
         product: i.product?._id || i.product,
         quantity: i.quantity
@@ -42,7 +39,7 @@ const placeOrder = async (req, res) => {
       return res.status(400).json({ message: 'Cart is empty or missing.' });
     }
 
-    // 3) create order document
+    // Create order
     const orderPayload = {
       user: req.user.id,
       products: cartItems,
@@ -54,7 +51,7 @@ const placeOrder = async (req, res) => {
 
     const order = await Order.create(orderPayload);
 
-    // 4) reduce stock
+    // Reduce stock
     for (const item of cartItems) {
       const prod = await Product.findById(item.product);
       if (prod) {
@@ -63,75 +60,77 @@ const placeOrder = async (req, res) => {
       }
     }
 
-    // 5) clear user’s cart
+    // Clear cart
     if (cart) {
       cart.items = [];
       await cart.save();
     }
 
     // ---------------------------
-    // ✅ Send email notifications
+    //  Send emails asynchronously
     // ---------------------------
-    try {
-      // fetch full user details (so we have name and email)
-      const userDoc = await User.findById(req.user.id).select('name email');
-      const customerName = userDoc?.name || 'Customer';
-      const customerEmail = userDoc?.email || null;
+    sendOrderEmails(order, cartItems).catch(err => {
+      console.error("Order email send failed:", err);
+    });
 
-      // Build simple HTML for owner email
-      const productsHtml = cartItems.map(ci => {
-        // find product details (price/name) from DB if needed
-        return `<li>Product: ${ci.product} — Quantity: ${ci.quantity}</li>`;
-      }).join('');
-
-      const ownerMail = {
-        from: process.env.EMAIL_USER,
-        to: process.env.OWNER_EMAIL,
-        subject: `New Order Received — ${order._id}`,
-        html: `
-          <h2>New Order Received</h2>
-          <p><strong>Order ID:</strong> ${order._id}</p>
-          <p><strong>Customer:</strong> ${customerName} ${ customerEmail ? `(&lt;${customerEmail}&gt;)` : '' }</p>
-          <p><strong>Total:</strong> ₹${totalPrice}</p>
-          <p><strong>Payment Method:</strong> ${order.paymentMethod}</p>
-          <p><strong>Payment Status:</strong> ${order.paymentStatus}</p>
-          <p><strong>Address ID:</strong> ${order.addressId || 'Not provided'}</p>
-          <h3>Items</h3>
-          <ul>${productsHtml}</ul>
-          <p>Visit admin panel for full details.</p>
-        `
-      };
-
-      await transporter.sendMail(ownerMail);
-
-      // Optional: send confirmation to user (uncomment if you want)
-      if (customerEmail) {
-        const userMail = {
-          from: process.env.EMAIL_USER,
-          to: customerEmail,
-          subject: `Order Confirmation — ${order._id}`,
-          html: `
-            <h2>Thanks for your order!</h2>
-            <p>Hello ${customerName},</p>
-            <p>We have received your order <strong>${order._id}</strong> for ₹${totalPrice}.</p>
-            <h3>Items</h3>
-            <ul>${productsHtml}</ul>
-            <p>We will notify you when your order status changes.</p>
-            <p>Thanks,<br/>E-COM Team</p>
-          `
-        };
-        // send but do not break flow if email fails
-        await transporter.sendMail(userMail);
-      }
-    } catch (emailErr) {
-      // Log email error but do not fail the whole request
-      console.error('Order email send failed:', emailErr);
-    }
-
+    // Respond immediately
     return res.status(201).json({ message: 'Order placed successfully', order });
+
   } catch (err) {
     console.error('placeOrder error:', err);
     return res.status(500).json({ message: 'Server error' });
+  }
+};
+
+
+
+const sendOrderEmails = async (order, cartItems) => {
+  // fetch full user details
+  const userDoc = await User.findById(order.user).select('name email');
+  const customerName = userDoc?.name || 'Customer';
+  const customerEmail = userDoc?.email || null;
+
+  const productsHtml = cartItems.map(ci => 
+    `<li>Product: ${ci.product} — Quantity: ${ci.quantity}</li>`
+  ).join('');
+
+  // Owner email
+  const ownerMail = {
+    from: process.env.EMAIL_USER,
+    to: process.env.OWNER_EMAIL,
+    subject: `New Order Received — ${order._id}`,
+    html: `
+      <h2>New Order Received</h2>
+      <p><strong>Order ID:</strong> ${order._id}</p>
+      <p><strong>Customer:</strong> ${customerName} ${ customerEmail ? `(&lt;${customerEmail}&gt;)` : '' }</p>
+      <p><strong>Total:</strong> ₹${order.totalPrice}</p>
+      <p><strong>Payment Method:</strong> ${order.paymentMethod}</p>
+      <p><strong>Payment Status:</strong> ${order.paymentStatus}</p>
+      <p><strong>Address ID:</strong> ${order.addressId || 'Not provided'}</p>
+      <h3>Items</h3>
+      <ul>${productsHtml}</ul>
+      <p>Visit admin panel for full details.</p>
+    `
+  };
+  await transporter.sendMail(ownerMail);
+
+  // Customer email
+  if (customerEmail) {
+    const userMail = {
+      from: process.env.EMAIL_USER,
+      to: customerEmail,
+      subject: `Order Confirmation — ${order._id}`,
+      html: `
+        <h2>Thanks for your order!</h2>
+        <p>Hello ${customerName},</p>
+        <p>We have received your order <strong>${order._id}</strong> for ₹${order.totalPrice}.</p>
+        <h3>Items</h3>
+        <ul>${productsHtml}</ul>
+        <p>We will notify you when your order status changes.</p>
+        <p>Thanks,<br/>E-COM Team</p>
+      `
+    };
+    await transporter.sendMail(userMail);
   }
 };
 

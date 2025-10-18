@@ -47,6 +47,51 @@ const addToCart = async (req, res) => {
   }
 };
 
+// Merge guest cart into user's cart
+const mergeGuestCart = async (req, res) => {
+  try {
+    const { items } = req.body; // array of { product: { _id, price, ... }, quantity }
+    if (!items || !Array.isArray(items)) {
+      return res.status(400).json({ message: "Invalid items format" });
+    }
+
+    let cart = await Cart.findOne({ user: req.user.id });
+    if (!cart) {
+      cart = await Cart.create({ user: req.user.id, items: [] });
+    }
+
+    for (const item of items) {
+      const productId = item?.product?._id || item?.productId;
+      const quantity = item?.quantity || 1;
+      if (!productId) continue;
+
+      const index = cart.items.findIndex(
+        (i) => i.product.toString() === productId
+      );
+
+      if (index > -1) {
+        // product exists → increase quantity
+        cart.items[index].quantity += quantity;
+      } else {
+        // new product → push
+        cart.items.push({ product: productId, quantity });
+      }
+    }
+
+    await cart.save();
+    await cart.populate("items.product");
+
+    res.json({
+      message: "Guest cart merged successfully",
+      cart: cart.items,
+    });
+  } catch (err) {
+    console.error("Error merging guest cart:", err);
+    res.status(500).json({ message: "Server error while merging cart" });
+  }
+};
+
+
 // Update quantity of a product
 const updateCartItem = async (req, res) => {
   try {
@@ -71,8 +116,7 @@ const updateCartItem = async (req, res) => {
 // Remove product from cart
 const removeCartItem = async (req, res) => {
   try {
-    const { productId } = req.body;
-
+    const productId = req.params.productId; //  use params instead of body
     const cart = await Cart.findOne({ user: req.user.id });
     if (!cart) return res.status(404).json({ message: 'Cart not found' });
 
@@ -86,4 +130,5 @@ const removeCartItem = async (req, res) => {
   }
 };
 
-module.exports = { getCart, addToCart, updateCartItem, removeCartItem };
+
+module.exports = { getCart, addToCart, updateCartItem, removeCartItem ,mergeGuestCart};

@@ -13,21 +13,21 @@ const adminMiddleware = require('../middleware/adminMiddleware');
 
 // ================= USER ROUTES =================
 
-// 🛒 Place a new order (only logged-in users)
+//  Place a new order 
 router.post('/', authMiddleware, placeOrder);
 
-// 📦 Get logged-in user's orders
+//  Get logged-in user's orders
 router.get('/myorders', authMiddleware, getUserOrders);
 
-// ❌ Cancel a specific order (only logged-in users)
+//  Cancel a specific order 
 router.put('/:id/cancel', authMiddleware, cancelOrder);
 
 // ================= ADMIN ROUTES =================
 
-// 👑 View all orders (admin only)
+//  View all orders 
 router.get('/', authMiddleware, adminMiddleware, getAllOrders);
 
-// 🚚 Update order status (admin only)
+//  Update order status 
 router.put('/:id', authMiddleware, adminMiddleware, updateOrderStatus);
 
 module.exports = router;

@@ -12,7 +12,7 @@ const razorpay = new Razorpay({
 
 //  Razorpay test order for fake payment 
 const createRazorpayOrder = async (req, res) => {
-  console.log("RAZORPAY_KEY_ID:", process.env.RAZORPAY_KEY_ID);
+ // console.log("RAZORPAY_KEY_ID:", process.env.RAZORPAY_KEY_ID);
   try {
     const { amount } = req.body; 
 

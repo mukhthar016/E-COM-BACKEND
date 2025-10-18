@@ -2,10 +2,11 @@ const Order = require('../models/orderModel');
 const Product = require('../models/productModel');
 const Cart = require('../models/cartModel');
 const mongoose = require("mongoose");
+const transporter = require('../config/nodemailer');
+const User = require('../models/userModel'); 
 
-// ======================================================
-// 🧩 NEW: placeOrder (no transactions - works in standalone MongoDB)
-// ======================================================
+
+
 // Place order (user)
 const placeOrder = async (req, res) => {
   try {
@@ -68,6 +69,65 @@ const placeOrder = async (req, res) => {
       await cart.save();
     }
 
+    // ---------------------------
+    // ✅ Send email notifications
+    // ---------------------------
+    try {
+      // fetch full user details (so we have name and email)
+      const userDoc = await User.findById(req.user.id).select('name email');
+      const customerName = userDoc?.name || 'Customer';
+      const customerEmail = userDoc?.email || null;
+
+      // Build simple HTML for owner email
+      const productsHtml = cartItems.map(ci => {
+        // find product details (price/name) from DB if needed
+        return `<li>Product: ${ci.product} — Quantity: ${ci.quantity}</li>`;
+      }).join('');
+
+      const ownerMail = {
+        from: process.env.EMAIL_USER,
+        to: process.env.OWNER_EMAIL,
+        subject: `New Order Received — ${order._id}`,
+        html: `
+          <h2>New Order Received</h2>
+          <p><strong>Order ID:</strong> ${order._id}</p>
+          <p><strong>Customer:</strong> ${customerName} ${ customerEmail ? `(&lt;${customerEmail}&gt;)` : '' }</p>
+          <p><strong>Total:</strong> ₹${totalPrice}</p>
+          <p><strong>Payment Method:</strong> ${order.paymentMethod}</p>
+          <p><strong>Payment Status:</strong> ${order.paymentStatus}</p>
+          <p><strong>Address ID:</strong> ${order.addressId || 'Not provided'}</p>
+          <h3>Items</h3>
+          <ul>${productsHtml}</ul>
+          <p>Visit admin panel for full details.</p>
+        `
+      };
+
+      await transporter.sendMail(ownerMail);
+
+      // Optional: send confirmation to user (uncomment if you want)
+      if (customerEmail) {
+        const userMail = {
+          from: process.env.EMAIL_USER,
+          to: customerEmail,
+          subject: `Order Confirmation — ${order._id}`,
+          html: `
+            <h2>Thanks for your order!</h2>
+            <p>Hello ${customerName},</p>
+            <p>We have received your order <strong>${order._id}</strong> for ₹${totalPrice}.</p>
+            <h3>Items</h3>
+            <ul>${productsHtml}</ul>
+            <p>We will notify you when your order status changes.</p>
+            <p>Thanks,<br/>E-COM Team</p>
+          `
+        };
+        // send but do not break flow if email fails
+        await transporter.sendMail(userMail);
+      }
+    } catch (emailErr) {
+      // Log email error but do not fail the whole request
+      console.error('Order email send failed:', emailErr);
+    }
+
     return res.status(201).json({ message: 'Order placed successfully', order });
   } catch (err) {
     console.error('placeOrder error:', err);
@@ -76,105 +136,95 @@ const placeOrder = async (req, res) => {
 };
 
 
-/*
-====================================================================
-🧾 OLD: Transactional placeOrder (for replica set / production use)
-====================================================================
 
-const placeOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const { addressId, paymentMethod, paymentStatus } = req.body;
 
-    const cart = await Cart.findOne({ user: req.user.id }).populate('items.product').session(session);
-    if (!cart || cart.items.length === 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: 'Cart is empty' });
-    }
 
-    let totalPrice = 0;
-    for (const item of cart.items) {
-      const product = item.product;
-      if (!product) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(404).json({ message: `Product not found in DB: ${item.product}` });
-      }
-      if (product.stock < item.quantity) {
-        await session.abortTransaction();
-        session.endSession();
-        return res.status(400).json({ message: `Not enough stock for ${product.name}` });
-      }
-      totalPrice += product.price * item.quantity;
-    }
+//  Get user orders
 
-    const orderPayload = {
-      user: req.user.id,
-      products: cart.items.map(i => ({ product: i.product._id, quantity: i.quantity })),
-      totalPrice,
-      address: address || 'No address provided',
-      paymentMethod: paymentMethod || 'COD'
-    };
-    if (paymentStatus) orderPayload.paymentStatus = paymentStatus;
-    if (addressId) orderPayload.addressId = addressId;
-
-    const [order] = await Order.create([orderPayload], { session });
-
-    for (const item of cart.items) {
-      const prod = await Product.findById(item.product._id).session(session);
-      prod.stock = prod.stock - item.quantity;
-      if (prod.stock < 0) prod.stock = 0;
-      await prod.save({ session });
-    }
-
-    cart.items = [];
-    await cart.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return res.status(201).json({ message: 'Order placed successfully', order });
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error('placeOrder error:', err);
-    return res.status(500).json({ message: 'Server error' });
-  }
-};
-*/
-
-// ======================================================
-// 🧾 Get user orders
-// ======================================================
+// 🛒 Get user orders with filters
 const getUserOrders = async (req, res) => {
   try {
-    const orders = await Order.find({ user: req.user.id })
-      .populate('products.product', 'name price');
+    const { status, sort, startDate, endDate, range } = req.query;
+    const filter = { user: req.user.id };
+
+    // Status filter
+    if (status) filter.status = status;
+
+    // Date filtering
+    if (range === "last6months") {
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+      filter.createdAt = { $gte: sixMonthsAgo };
+    } else if (range === "thisyear") {
+      const start = new Date(new Date().getFullYear(), 0, 1);
+      const end = new Date(new Date().getFullYear(), 11, 31, 23, 59, 59);
+      filter.createdAt = { $gte: start, $lte: end };
+    } else if (startDate && endDate) {
+      filter.createdAt = {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      };
+    }
+
+    // Sort logic
+    const sortOptions = {
+      latest: { createdAt: -1 },
+      oldest: { createdAt: 1 },
+      price_asc: { totalPrice: 1 },
+      price_desc: { totalPrice: -1 },
+    };
+
+    const orders = await Order.find(filter)
+      .populate("products.product", "name price image")
+      .sort(sortOptions[sort] || { createdAt: -1 });
+
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error(err);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ======================================================
-// 🧾 Get all orders (Admin)
-// ======================================================
+
+
+//  Get all orders (Admin)
+
 const getAllOrders = async (req, res) => {
   try {
-    const orders = await Order.find()
-      .populate('user', 'name email')
-      .populate('products.product', 'name price');
+    const { status, sort, startDate, endDate } = req.query;
+
+    const filter = {};
+    if (status) filter.status = status;
+
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = new Date(startDate);
+      if (endDate) {
+        const nextDay = new Date(endDate);
+        nextDay.setDate(nextDay.getDate() + 1);
+        filter.createdAt.$lte = nextDay;
+      }
+    }
+
+    let sortOptions = { createdAt: -1 };
+    if (sort === "oldest") sortOptions = { createdAt: 1 };
+    if (sort === "price_asc") sortOptions = { totalPrice: 1 };
+    if (sort === "price_desc") sortOptions = { totalPrice: -1 };
+
+    const orders = await Order.find(filter)
+      .populate("user", "name email")
+      .populate("products.product", "name price")
+      .sort(sortOptions);
+
     res.json(orders);
   } catch (err) {
-    res.status(500).json({ message: 'Server error' });
+    console.error("getAllOrders error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
-// ======================================================
-// 🧾 Update order status (Admin)
-// ======================================================
+// Update order status (Admin)
+
 const updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -190,9 +240,9 @@ const updateOrderStatus = async (req, res) => {
   }
 };
 
-// ======================================================
-// 🧾 Cancel order (no transactions)
-// ======================================================
+
+//  Cancel order (no transactions)
+
 const cancelOrder = async (req, res) => {
   try {
     const orderId = req.params.id;
@@ -228,58 +278,9 @@ const cancelOrder = async (req, res) => {
   }
 };
 
-/*
-====================================================================
-🧾 OLD: Transactional cancelOrder (for replica set / production use)
-====================================================================
 
-const cancelOrder = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const orderId = req.params.id;
-    const order = await Order.findById(orderId).session(session);
-    if (!order) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: 'Order not found' });
-    }
 
-    if (order.status !== 'Pending') {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ message: 'Only pending orders can be cancelled' });
-    }
 
-    if (order.user.toString() !== req.user.id && !req.user.isAdmin) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(403).json({ message: 'Not authorized to cancel this order' });
-    }
-
-    for (const item of order.products) {
-      const prod = await Product.findById(item.product).session(session);
-      if (prod) {
-        prod.stock += item.quantity;
-        await prod.save({ session });
-      }
-    }
-
-    order.status = 'Cancelled';
-    await order.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return res.json({ message: 'Order cancelled', order });
-  } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-    console.error('cancelOrder error:', err);
-    return res.status(500).json({ message: 'Server error' });
-  }
-};
-*/
 
 module.exports = {
   cancelOrder,

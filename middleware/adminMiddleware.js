@@ -1,4 +1,6 @@
 const adminMiddleware = (req, res, next) => {
+  console.log("🧑‍💼 Admin middleware req.user:", req.user);
+  console.log("admin middleware req.isAdmin",req.isAdmin)
   if (req.user && req.user.isAdmin) {
     next(); // proceed to the next handler
   } else {

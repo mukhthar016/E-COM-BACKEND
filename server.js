@@ -1,6 +1,7 @@
+const dotenv = require('dotenv');
 const express = require('express');
 const mongoose = require('mongoose');
-const dotenv = require('dotenv');
+
 const cors = require('cors');
 
 // Import Routes
@@ -11,6 +12,7 @@ const cartRoutes = require('./routes/cartRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const categoryRoutes = require('./routes/categoryRoutes');
 const addressRoutes = require('./routes/addressRoutes');
+const feedbackRoutes = require("./routes/feedbackRoutes");
 
 
 
@@ -38,6 +40,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/categories', categoryRoutes);
 //app.use("/api/payment", require("./routes/paymentRoutes"));
 app.use('/api/addresses', addressRoutes);
+app.use("/api/feedback", feedbackRoutes);
 
 
 // Test route

@@ -1,23 +1,17 @@
 const express = require('express');
 const router = express.Router();
-const {
-  addProduct,
-  getProducts,
-  getProductById,
-  updateProduct,
-  deleteProduct,
-} = require('../controllers/productController');
-
+const upload = require('../middleware/multer'); // multer middleware
+const { addProduct, updateProduct, deleteProduct, getProducts, getProductById } = require('../controllers/productController');
 const authMiddleware = require('../middleware/authMiddleware');
 const adminMiddleware = require('../middleware/adminMiddleware');
 
-// Public routes any user can get products without logging in 
+// Public
 router.get('/', getProducts);
 router.get('/:id', getProductById);
 
-// Admin-only protected routes paths which are only accessible by admins 
-router.post('/', authMiddleware, adminMiddleware, addProduct);
-router.put('/:id', authMiddleware, adminMiddleware, updateProduct);
+// Admin only
+router.post('/', authMiddleware, adminMiddleware, upload.single('image'), addProduct);
+router.put('/:id', authMiddleware, adminMiddleware, upload.single('image'), updateProduct);
 router.delete('/:id', authMiddleware, adminMiddleware, deleteProduct);
 
 module.exports = router;
